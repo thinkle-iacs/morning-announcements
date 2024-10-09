@@ -11,6 +11,11 @@
  * https://github.com/thinkle-iacs/morning-announcements/
  *
  * Versions and Notes:
+ * 1.2 - Handle "zombie" slides
+ *    -> If a slide is expired and then dragged back to the start of the
+ *       presentation, it will be moved to the end of the presentation
+ *       to maintain order. A badge will be added to the slide to indicate
+ *       that it is a "zombie" slide.
  * 1.1 - Handle copied slides
  *     -> It turns out asking teachers not to copy slides is a BIG ask --
  *        people really like making copies and dragging and dropping to
@@ -156,23 +161,25 @@ function handleExpiration(slide, fields) {
       );
       slide.move(SlidesApp.getActivePresentation().getSlides().length);
     }
-  }
+  } 
 }
 
 function updateAllSlides() {
   let now = new Date();
   let nowSeconds = now.getTime();
   let slides = SlidesApp.getActivePresentation().getSlides();
-  slides.forEach((slide) => {
+  let lastUnexpiredSlideIndex = 0;
+  slides.forEach((slide, idx) => {
+    let fields = getFieldsForSlide(slide);
     let pageId = slide.getObjectId();
-    let notes = slide.getNotesPage().getSpeakerNotesShape().getText();
-    let currentValue = notes.asString();
-    let fields = parseNotesText(currentValue);
     if (fields.id && fields.id != pageId) {
       console.log("A copy: resetting fields!!");
       fields = {}; // reset fields
     }
     fields.id = pageId; // Include pageId in fields!
+    if (fields.Permanent || !fields.expired) {
+      lastUnexpiredSlideIndex = idx;
+    }
     if (fields.Permanent || fields.expired) {
       // Skip permanent slides!
       return;
@@ -181,8 +188,26 @@ function updateAllSlides() {
     handleNewBadge(slide, fields);
     handleExpiration(slide, fields);
     let newText = createNotesText(fields);
-    notes.setText(newText);
+    slide.getNotesPage().getSpeakerNotesShape().getText().setText(newText);
   });
+  // Make a second pass to handle "zombie" slides
+  // (i.e. expired slides that someone dragged back)
+  slides.forEach((slide, idx) => {
+    let fields = getFieldsForSlide(slide);
+    if (fields.expired && idx <= lastUnexpiredSlideIndex) {
+      console.log("Found a zombie slide, moving it after the last unexpired slide");
+      slide.move(lastUnexpiredSlideIndex + 1);
+      lastUnexpiredSlideIndex -= 1; // Update the index after moving the slide
+      fields.text.push("\n\nThis slide was expired, then dragged back to the start. It has been moved to maintain order in the presentation. To de-zombify this slide, be sure to delete the notes before moving it so it can start life as a new slide once again.");
+      fields.zombieBadge = addBadge(slide, "Zombie (see Notes)", "#7FBF3F"); // Add a zombie badge with updated text and color
+      slide.getNotesPage().getSpeakerNotesShape().getText().setText(createNotesText(fields));
+    }
+  });
+}
+
+function getFieldsForSlide(slide) {
+  // Function to get the fields for a given slide by parsing the notes
+  return parseNotesText(slide.getNotesPage().getSpeakerNotesShape().getText().asString());
 }
 
 function createNotesText(fields) {
